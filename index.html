@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BlockyDash — Neon Blue Road</title>
+<style>
+  :root{
+    --neon-lime: #00ff55;
+    --neon-mag: #ff2dcb;
+    --neon-blue: #00d4ff;
+    --indigo-bg: #060416;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#020118,#060416);font-family:Inter,Arial,sans-serif;overflow:hidden;color:#eaf2ff}
+  canvas{display:block}
+  /* HUD & title */
+  #title{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:60;text-align:center}
+  #title h1{margin:0;font-size:28px;color:#8b82ff;text-shadow:0 0 18px rgba(139,130,255,0.25)}
+  #title small{display:block;font-size:11px;color:#aebee8;margin-top:4px}
+  #hud{position:fixed;left:14px;top:12px;z-index:60;background:rgba(0,0,0,0.45);padding:8px 12px;border-radius:10px;backdrop-filter:blur(4px)}
+  #hud .stat{font-weight:800;margin-right:12px}
+  /* Start popup (bottom center) */
+  #startPopup{position:fixed;left:50%;bottom:8vh;transform:translateX(-50%);z-index:80;pointer-events:auto}
+  .popupBox{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(0,0,0,0.45));padding:14px 22px;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,0.6);text-align:center}
+  .swipeText{font-size:18px;font-weight:900;color:var(--neon-mag);text-shadow:0 0 18px rgba(255,45,203,0.25)}
+  .sub{font-size:12px;color:#c6d4ff;margin-top:8px}
+  /* Gameover UI */
+  #gameOver{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:85;pointer-events:none}
+  .gameOverPanel{background:linear-gradient(180deg,rgba(0,0,0,0.6),rgba(0,0,0,0.4));padding:16px;border-radius:12px;text-align:center;pointer-events:auto}
+  .btn{margin-top:10px;padding:10px 16px;border-radius:10px;border:0;background:var(--neon-lime);color:#002;font-weight:800;cursor:pointer}
+  .small{font-size:12px;color:#9fb0c7}
+  @media(max-width:600px){ .swipeText{font-size:16px} #title h1{font-size:22px} }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="title"><h1>BlockyDash</h1><small>made by Abhinav</small></div>
+<div id="hud"><span class="stat">Score: <span id="score">0</span></span><span class="stat small">Coins: <span id="coins">0</span></span></div>
+
+<!-- start popup -->
+<div id="startPopup"><div class="popupBox" id="startBox"><div class="swipeText">SWIPE TO DODGE!</div><div class="sub">Swipe left or right — Tap anywhere to start</div></div></div>
+
+<!-- game over -->
+<div id="gameOver">
+  <div class="gameOverPanel">
+    <h2 style="margin:0;color:var(--neon-mag)">YOU CRASHED!</h2>
+    <div class="small" id="finalScore" style="margin-top:8px">Score: 0</div>
+    <div style="margin-top:10px"><button class="btn" id="retryBtn">RETRY</button></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+<script>
+/* BlockyDash — Final rebuilt with neon-blue road + neon-lime player
+   - Swipe-only mobile controls (Option C)
+   - Guaranteed visible player (neon-lime)
+   - 3 lanes, explosion, slow-mo, camera shake, SFX
+*/
+
+// --- Setup renderer & scene ---
+const canvas = document.getElementById('game');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x040317);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x030316, 10, 120);
+
+const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 1000);
+
+camera.position.set(0, 5.5, 14);
+camera.lookAt(0, 1, 0);
+
+// lights
+const hemi = new THREE.HemisphereLight(0xdfefff, 0x071026, 0.95); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 0.9); dir.position.set(-10, 20, 8); dir.castShadow = true; scene.add(dir);
+
+// --- Track (neon-blue road) ---
+const laneW = 3;
+const track = new THREE.Group(); scene.add(track);
+function addTrackSeg(z){
+  const g = new THREE.BoxGeometry(laneW*3 + 6, 0.6, 26);
+  const m = new THREE.MeshStandardMaterial({ color: 0x042033, roughness: 0.95 });
+  const seg = new THREE.Mesh(g, m); seg.position.set(0, -0.3, z); seg.receiveShadow = true; track.add(seg);
+
+  // neon strip lines (blue)
+  for(let i=-1;i<=1;i++){
+    const lnGeo = new THREE.BoxGeometry(0.06, 0.02, 26);
+    const lnMat = new THREE.MeshBasicMaterial({ color: 0x00d4ff });
+    const ln = new THREE.Mesh(lnGeo, lnMat); ln.position.set(i*laneW, 0.02, z); track.add(ln);
+  }
+}
+for(let i=0;i<24;i++) addTrackSeg(-i*26);
+
+// pillars for depth (parallax)
+const pillars = new THREE.Group(); scene.add(pillars);
+for(let i=0;i<60;i++){
+  const w = 2 + Math.random()*6, h = 6 + Math.random()*28;
+  const geo = new THREE.BoxGeometry(w,h,2);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x021026, roughness: 1 });
+  const b = new THREE.Mesh(geo, mat);
+  b.position.set((Math.random()<0.5?-1:1)*(12+Math.random()*28), h/2 -1, -i*12 - 30);
+  pillars.add(b);
+}
+
+// --- PLAYER (GUARANTEED VISIBLE neon-lime) ---
+const playerGroup = new THREE.Group();
+scene.add(playerGroup);
+
+const playerMat = new THREE.MeshStandardMaterial({
+  color: 0x00ff55,
+  emissive: 0x008833,
+  emissiveIntensity: 0.8,
+  metalness: 0.15,
+  roughness: 0.35
+});
+
+// Use Box (visible) — taller for clarity
+const playerBody = new THREE.Mesh(new THREE.BoxGeometry(1, 1.6, 1), playerMat);
+playerBody.castShadow = true;
+playerGroup.add(playerBody);
+
+// small dark visor so player has contrast
+const visor = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.12, 0.12),
+  new THREE.MeshStandardMaterial({ color: 0x002200, emissive: 0x003300, emissiveIntensity: 0.3 })
+);
+visor.position.set(0, 0.35, 0.45);
+playerGroup.add(visor);
+
+// ensure player position above ground and in view
+playerGroup.position.set(0, 1.0, 2);
+camera.lookAt(playerGroup.position);
+
+// --- Pools for obstacles/coins/particles ---
+const obstaclePool = [], coinPool = [], activeObstacles = [], activeCoins = [], particles = [], dashTrail = [];
+
+// obstacle/coin builders
+function makeObstacle(){
+  const o = obstaclePool.pop() || new THREE.Mesh(
+    new THREE.BoxGeometry(1.6, 2.0, 1.6),
+    new THREE.MeshStandardMaterial({ color: 0xff4b7a, roughness: 0.6 })
+  );
+  o.userData.spin = (Math.random() - 0.5) * 0.05;
+  return o;
+}
+function makeCoin(){
+  const c = coinPool.pop() || new THREE.Mesh(
+    new THREE.TorusGeometry(0.45, 0.12, 10, 30),
+    new THREE.MeshStandardMaterial({ color: 0xffd34d, metalness: 0.95 })
+  );
+  c.rotation.x = Math.PI / 2;
+  return c;
+}
+
+// spawn helpers
+function spawnObstacle(z = -320){
+  if(activeObstacles.length > 40) return;
+  const o = makeObstacle();
+  const laneIndex = Math.floor(Math.random()*3) - 1; // -1,0,1
+  o.position.set(laneIndex * laneW, 1.1, z);
+  scene.add(o); activeObstacles.push(o);
+}
+function spawnCoin(z = -260){
+  if(activeCoins.length > 40) return;
+  const c = makeCoin();
+  const laneIndex = Math.floor(Math.random()*3) - 1;
+  c.position.set(laneIndex * laneW, 1.2, z);
+  scene.add(c); activeCoins.push(c);
+}
+
+// particles & dash trail
+const particleGeo = new THREE.SphereGeometry(0.06, 6, 6);
+function spawnParticles(pos, count=14, color=0xff2dcb){
+  for(let i=0;i<count;i++){
+    const m = new THREE.Mesh(particleGeo, new THREE.MeshStandardMaterial({ color }));
+    m.position.copy(pos);
+    m.userData = { vx:(Math.random()-0.5)*2.2, vy:Math.random()*2.2, vz:(Math.random()-0.5)*2.2, life:1.2 };
+    scene.add(m); particles.push(m);
+  }
+}
+function spawnDashTrail(){
+  const d = new THREE.Mesh(new THREE.SphereGeometry(0.06,6,6), new THREE.MeshBasicMaterial({ color: 0x00ff55, transparent:true }));
+  d.position.copy(playerGroup.position);
+  d.userData = { life: 0.28 };
+  scene.add(d); dashTrail.push(d);
+}
+
+// collisions (Box3)
+const boxA = new THREE.Box3(), boxB = new THREE.Box3();
+function intersects(a,b){ boxA.setFromObject(a); boxB.setFromObject(b); return boxA.intersectsBox(boxB); }
+
+// --- GAME STATE & UI ---
+let playing = false;
+let score = 0;
+let coinCount = Number(localStorage.getItem('bd_coins') || 0);
+document.getElementById('coins') && (document.getElementById('coins').textContent = coinCount);
+
+let forwardSpeed = 1.1;
+let spawnTimer = 0.6, coinTimer = 1.2, trainTimer = 6;
+let targetLane = 1; // 0=left,1=center,2=right
+let shake = 0;
+let slowMo = 1.0;
+
+// --- WebAudio synth SFX (no external files) ---
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const audCtx = new AudioCtx();
+const master = audCtx.createGain(); master.gain.value = 0.12; master.connect(audCtx.destination);
+function tone(freq, time=0.08, type='sine'){ try{
+  const o = audCtx.createOscillator(); const g = audCtx.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(master);
+  g.gain.value = 0.0001; o.start(); g.gain.exponentialRampToValueAtTime(0.6, audCtx.currentTime + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, audCtx.currentTime + time); o.stop(audCtx.currentTime + time + 0.02);
+}catch(e){} }
+function sfxCoin(){ tone(1100,0.06,'sine'); tone(900,0.08,'sine'); }
+function sfxDash(){ tone(520,0.12,'sawtooth'); }
+function sfxHit(){ tone(80,0.26,'square'); }
+window.addEventListener('pointerdown', ()=>{ try{ audCtx.resume(); }catch(e){} }, { once:true });
+
+// --- SWIPE controls (mobile) ---
+let touchStartX = null, touchStartT = 0;
+const SWIPE_THRESH = 30; // px threshold
+
+function onTouchStart(e){
+  const x = e.touches ? e.touches[0].clientX : e.clientX;
+  touchStartX = x; touchStartT = Date.now();
+}
+function onTouchEnd(e){
+  if(touchStartX === null) return;
+  const x = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0].clientX : e.clientX;
+  const dx = x - touchStartX;
+  const dt = Date.now() - touchStartT;
+  touchStartX = null;
+  if(Math.abs(dx) > SWIPE_THRESH && dt < 700){
+    if(dx > 0) swipeRight();
+    else swipeLeft();
+  }
+}
+function swipeLeft(){ if(!playing) return; targetLane = Math.max(0, targetLane - 1); sfxDash(); spawnDashTrail(); }
+function swipeRight(){ if(!playing) return; targetLane = Math.min(2, targetLane + 1); sfxDash(); spawnDashTrail(); }
+
+window.addEventListener('touchstart', onTouchStart, { passive:true });
+window.addEventListener('touchend', onTouchEnd, { passive:true });
+window.addEventListener('mousedown', onTouchStart);
+window.addEventListener('mouseup', onTouchEnd);
+
+// desktop fallback
+window.addEventListener('keydown', (e)=>{ if(e.key==='ArrowLeft') swipeLeft(); if(e.key==='ArrowRight') swipeRight(); });
+
+// --- Start popup tap to start (Option C) ---
+const startPopup = document.getElementById('startPopup');
+startPopup.addEventListener('pointerdown', startGame, { once:true, passive:true });
+function startGame(){
+  playing = true; score = 0; forwardSpeed = 1.1; spawnTimer = 0.6; coinTimer = 1.2;
+  startPopup.style.display = 'none';
+}
+
+// initial fillers so scene doesn't look empty
+for(let i=0;i<3;i++){ spawnObstacle(-120 - i*70); spawnCoin(-80 - i*50); }
+
+// camera shake helper
+function cameraShakeFor(sec){ shake = sec; }
+
+// --- MAIN LOOP ---
+let last = performance.now();
+function loop(now){
+  const dtRaw = Math.min(0.05, (now - last)/1000); last = now;
+  const dt = dtRaw * slowMo;
+
+  if(playing){
+    // smooth lane follow
+    const lanes = [-laneW, 0, laneW];
+    playerGroup.position.x += (lanes[targetLane] - playerGroup.position.x) * Math.min(1, 12 * dt);
+
+    // world forward
+    const moveZ = forwardSpeed * 60 * dt;
+    track.children.forEach(s => s.position.z += moveZ);
+    pillars.children.forEach(p => { p.position.z += moveZ*0.36; if(p.position.z > 160) p.position.z -= 160*1.2; });
+    for(const seg of track.children) if(seg.position.z > 35) seg.position.z -= 20*26;
+
+    // spawn logic
+    spawnTimer -= dt;
+    if(spawnTimer <= 0){ spawnTimer = 0.6 - Math.min(0.42, score/4000); if(Math.random() < 0.75) spawnObstacle(-320); else spawnCoin(-300); }
+    coinTimer -= dt;
+    if(coinTimer <= 0){ coinTimer = 0.9 + Math.random()*0.9; spawnCoin(-260); }
+
+    // move obstacles
+    for(let i=activeObstacles.length-1;i>=0;i--){
+      const o = activeObstacles[i];
+      o.position.z += forwardSpeed * 60 * dt * (o.userData.type==='train' ? 1.06 : 1);
+      if(o.userData && o.userData.spin) o.rotation.y += o.userData.spin;
+      if(o.position.z > 60){ scene.remove(o); activeObstacles.splice(i,1); obstaclePool.push(o); continue; }
+      if(intersects(playerGroup, o) && playerGroup.position.y <= 1.6){
+        // crash
+        sfxHit(); spawnParticles(playerGroup.position, 28, 0xff2dcb); cameraShakeFor(0.9);
+        slowMo = 0.18; playing = false;
+        setTimeout(()=>{ document.getElementById('gameOver').style.display='flex'; document.getElementById('finalScore').textContent = 'Score: ' + Math.floor(score); document.getElementById('retryBtn').style.display='inline-block'; localStorage.setItem('bd_coins', coinCount); const best=Number(localStorage.getItem('bd_best')||0); if(Math.floor(score)>best) localStorage.setItem('bd_best', Math.floor(score)); }, 600);
+      }
+    }
+
+    // move coins
+    for(let i=activeCoins.length-1;i>=0;i--){
+      const c = activeCoins[i];
+      c.position.z += forwardSpeed * 60 * dt;
+      c.rotation.z += 0.16;
+      if(c.position.z > 60){ scene.remove(c); activeCoins.splice(i,1); coinPool.push(c); continue; }
+      if(intersects(playerGroup, c)){ coinCount++; sfxCoin(); document.getElementById('coins') && (document.getElementById('coins').textContent = coinCount); scene.remove(c); activeCoins.splice(i,1); coinPool.push(c); }
+    }
+
+    // particles
+    for(let i=particles.length-1;i>=0;i--){
+      const p = particles[i]; p.userData.life -= dtRaw; p.position.x += p.userData.vx * dtRaw * 18; p.position.y += p.userData.vy * dtRaw * 18; p.position.z += p.userData.vz * dtRaw * 18; p.material.opacity = Math.max(0, p.userData.life);
+      if(p.userData.life <= 0){ scene.remove(p); particles.splice(i,1); }
+    }
+
+    // dash trail fade
+    for(let i=dashTrail.length-1;i>=0;i--){
+      const d = dashTrail[i]; d.userData.life -= dtRaw; d.material.opacity = Math.max(0, d.userData.life); d.position.z -= dtRaw*120;
+      if(d.userData.life <= 0){ scene.remove(d); dashTrail.splice(i,1); }
+    }
+
+    // score
+    score += dtRaw * 80; document.getElementById('score').textContent = Math.floor(score);
+    forwardSpeed = Math.min(2.6, forwardSpeed + dtRaw * 0.0015);
+  }
+
+  // camera shake
+  if(shake > 0){
+    shake -= dtRaw;
+    camera.position.x += (Math.random()*2 - 1) * shake * 0.06;
+    camera.position.y += (Math.random()*2 - 1) * shake * 0.03;
+  }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// retry button
+document.getElementById('retryBtn').onclick = ()=>{ location.reload(); };
+
+// responsive
+window.addEventListener('resize', ()=>{ renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+</script>
+</body>
+</html>
